@@ -1,8 +1,7 @@
 #include <Arduino.h>
-#include <SPI.h>
-#include <LoRa.h>
+#include "lora_sm.h"
 
-#define NODE_ID 0x03
+#define NODE_ID 0x01
 
 #define CS_PIN 8
 #define RST_PIN 4
@@ -10,73 +9,50 @@
 
 #define MAX_PAYLOAD 64
 
-void sendPacket(uint8_t dst, uint8_t src, uint8_t ttl, const uint8_t* data, uint8_t len) {
-    LoRa.beginPacket();
-    LoRa.write(dst);
-    LoRa.write(src);
-    LoRa.write(ttl);
-    LoRa.write(len);
-    LoRa.write(data, len);
-    LoRa.endPacket();
-}
-
-bool receivePacket(uint8_t* dst, uint8_t* src, uint8_t* ttl, uint8_t* buf, uint8_t* len) {
-    int packetSize = LoRa.parsePacket();
-    if (!packetSize) return false;
-
-    *dst = LoRa.read();
-    *src = LoRa.read();
-    *ttl = LoRa.read();
-    *len = LoRa.read();
-
-    for (int i = 0; i < *len && LoRa.available(); i++) {
-        buf[i] = LoRa.read();
-    }
-
-    return true;
-}
-
 void setup() {
-    Serial.begin(115200);
-    LoRa.setPins(CS_PIN, RST_PIN, DIO0_PIN);
-    LoRa.begin(915E6);
+  Serial.begin(115200);
+
+  lora_configuration_t config = {
+    .node_id = NODE_ID,
+    .cs_pin = CS_PIN,
+    .rst_pin = RST_PIN,
+    .dio0_pin = DIO0_PIN,
+    .frequency = (uint32_t)915E6
+  };
+  lora_sm_set_configuration(&config);
 #if (NODE_ID == 0x01)
-    Serial.println("MASTER listo");
+  Serial.println("MASTER listo");
 #else
-    Serial.println("END NODE listo");
+  Serial.println("END NODE listo");
 #endif
 }
 
 void loop() {
 
+  lora_sm_state_t lora_sm_state = lora_sm_get_state();
+  if(lora_sm_state != lora_sm_run()) {
+    char state_str[128];
+    sprintf(state_str, "Transitioning from %s to %s", lora_sm_state_to_string(lora_sm_state), lora_sm_state_to_string(lora_sm_get_state()));
+    Serial.println(state_str);
+  }
+
 #if (NODE_ID == 0x01)
-    static uint32_t counter = 0;
-    char msg[32];
-    sprintf(msg, "Msg %lu", counter++);
+  static uint32_t counter = 0;
+  char msg[32];
+  sprintf(msg, "Msg %lu", counter++);
+  Serial.print("Enviando: ");
+  Serial.println(msg);
 
-    Serial.print("Enviando: ");
-    Serial.println(msg);
-
-    sendPacket(
-        0x03,        // destino final
-        NODE_ID,
-        5,           // TTL (máx saltos)
-        (uint8_t*)msg,
-        strlen(msg)
-    );
-
-    delay(3000);
-#else
-    uint8_t buf[64]; 
-    uint8_t dst, src, ttl, len;
-
-    if (receivePacket(&dst, &src, &ttl, buf, &len)) {
-
-        if (dst == NODE_ID) {
-            Serial.print("Mensaje recibido: ");
-            Serial.write(buf, len);
-            Serial.println();
-        }
-    }
+  lora_sm_msg_t msg_struct = {
+    .dst_id = 0x03,
+    .src_id = NODE_ID,
+    .ttl = 5,
+    .type = LORA_SM_MSG_TYPE_DATA,
+    .payload = {0},
+    .payload_len = (uint8_t)strlen(msg)
+  };
+  memcpy(msg_struct.payload, msg, strlen(msg));
+  lora_sm_request_to_send(&msg_struct);
+  delay(3000);
 #endif
 }
