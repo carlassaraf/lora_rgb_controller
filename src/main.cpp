@@ -2,7 +2,7 @@
 #include <SPI.h>
 #include <LoRa.h>
 
-#define NODE_ID 0x01
+#define NODE_ID 0x03
 
 #define CS_PIN 8
 #define RST_PIN 4
@@ -40,12 +40,17 @@ void setup() {
     Serial.begin(115200);
     LoRa.setPins(CS_PIN, RST_PIN, DIO0_PIN);
     LoRa.begin(915E6);
+#if (NODE_ID == 0x01)
     Serial.println("MASTER listo");
+#else
+    Serial.println("END NODE listo");
+#endif
 }
 
 void loop() {
-    static uint32_t counter = 0;
 
+#if (NODE_ID == 0x01)
+    static uint32_t counter = 0;
     char msg[32];
     sprintf(msg, "Msg %lu", counter++);
 
@@ -61,4 +66,17 @@ void loop() {
     );
 
     delay(3000);
+#else
+    uint8_t buf[64]; 
+    uint8_t dst, src, ttl, len;
+
+    if (receivePacket(&dst, &src, &ttl, buf, &len)) {
+
+        if (dst == NODE_ID) {
+            Serial.print("Mensaje recibido: ");
+            Serial.write(buf, len);
+            Serial.println();
+        }
+    }
+#endif
 }
