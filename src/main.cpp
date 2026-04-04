@@ -10,7 +10,9 @@
 #define MAX_PAYLOAD 64
 
 void setup() {
+#ifdef LORA_SM_DEBUG
   Serial.begin(115200);
+#endif
 
   lora_configuration_t config = {
     .node_id = NODE_ID,
@@ -20,28 +22,27 @@ void setup() {
     .frequency = (uint32_t)915E6
   };
   lora_sm_set_configuration(&config);
-#if (NODE_ID == 0x01)
-  Serial.println("MASTER listo");
-#else
-  Serial.println("END NODE listo");
-#endif
 }
 
 void loop() {
 
   lora_sm_state_t lora_sm_state = lora_sm_get_state();
   if(lora_sm_state != lora_sm_run()) {
+#ifdef LORA_SM_DEBUG
     char state_str[128];
     sprintf(state_str, "Transitioning from %s to %s", lora_sm_state_to_string(lora_sm_state), lora_sm_state_to_string(lora_sm_get_state()));
     Serial.println(state_str);
+#endif
   }
 
 #if (NODE_ID == 0x01)
   static uint32_t counter = 0;
   char msg[32];
   sprintf(msg, "Msg %lu", counter++);
+#ifdef LORA_SM_DEBUG
   Serial.print("Enviando: ");
   Serial.println(msg);
+#endif
 
   lora_sm_msg_t msg_struct = {
     .dst_id = 0x03,

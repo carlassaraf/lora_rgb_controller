@@ -69,7 +69,9 @@ static lora_sm_state_t lora_sm_state_processing(void) {
   lora_sm_msg_t msg;
   // Validación mínima: al menos header (5 bytes)
   if (LoRa.available() < 5) {
+#ifdef LORA_SM_DEBUG
     Serial.println("Packet too short");
+#endif
     lora_sm_flush_rx_buffer();
     return LORA_SM_IDLE;
   }
@@ -83,7 +85,9 @@ static lora_sm_state_t lora_sm_state_processing(void) {
 
   // Validación de longitud
   if (msg.payload_len > sizeof(msg.payload)) {
+#ifdef LORA_SM_DEBUG
     Serial.println("Payload too large");
+#endif
     lora_sm_flush_rx_buffer();
     return LORA_SM_IDLE;
   }
@@ -96,11 +100,14 @@ static lora_sm_state_t lora_sm_state_processing(void) {
 
   // Si llegaron menos bytes de los esperados
   if (i != msg.payload_len) {
+#ifdef LORA_SM_DEBUG
     Serial.println("Warning: payload length mismatch");
+#endif
     lora_sm_flush_rx_buffer();
     return LORA_SM_IDLE;
   }
 
+#ifdef LORA_SM_DEBUG
   Serial.println("----- LoRa Packet -----");
   Serial.print("DST: 0x");
   if (msg.dst_id < 16) Serial.print("0");
@@ -144,12 +151,17 @@ static lora_sm_state_t lora_sm_state_processing(void) {
   Serial.print("SNR: ");
   Serial.println(LoRa.packetSnr());
   Serial.println("-----------------------");
+#endif
 
   if(msg.dst_id == lora_sm_config.node_id) {
+#ifdef LORA_SM_DEBUG
     Serial.println("Packet is for me!");
+#endif
     /** @todo Implement message processing logic */
   } else {
+#ifdef LORA_SM_DEBUG
     Serial.println("Packet is not for me, ignoring...");
+#endif
   }
 
   return LORA_SM_IDLE;
@@ -222,6 +234,7 @@ bool lora_sm_request_to_send(lora_sm_msg_t *msg) {
   return true;
 }
 
+#ifdef LORA_SM_DEBUG
 /** @brief Converts a LoRa state machine state to a human-readable string */
 const char *lora_sm_state_to_string(lora_sm_state_t state) {
   switch (state) {
@@ -235,5 +248,6 @@ const char *lora_sm_state_to_string(lora_sm_state_t state) {
       return "SENDING";
     default:
       return "UNKNOWN";
-  } 
+  }
 }
+#endif
