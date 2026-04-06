@@ -21,10 +21,17 @@ static uint8_t tx_head = 0;
 static uint8_t tx_tail = 0;
 static uint8_t lora_sm_pending_to_send_count = 0;
 
+// Message received for current node
+static lora_sm_msg_t lora_sm_received_msg;
+static volatile bool lora_sm_received_msg_pending = false;
+
 /** @brief LoRa receive callback function */
 static void lora_sm_on_receive_callback(int packetSize) {
   // Trigger state transition to RECEIVING state when a packet is received
   if (packetSize > 0) { lora_sm_packet_pending = true; }
+#ifdef LORA_SM_DEBUG
+  Serial.println("Packet received callback triggered");
+#endif
 };
 
 /** @brief Helper function to flush rx buffer */
@@ -49,16 +56,11 @@ static lora_sm_state_t lora_sm_state_initializing(void) {
 
 static lora_sm_state_t lora_sm_state_idle(void) {
   // In idle state we just wait for a packet to be received or a send request to be made
-
-  // Fairness to avoid starvation
-  static uint8_t lora_sm_tx_priority = 0;
-  if(lora_sm_packet_pending && lora_sm_tx_priority < 3) {
+  if(lora_sm_packet_pending) {
     lora_sm_packet_pending = false;
-    lora_sm_tx_priority++;
     return LORA_SM_PROCESSING;
   }
   if(lora_sm_pending_to_send_count > 0) {
-    lora_sm_tx_priority = 0;
     return LORA_SM_SENDING;
   }
   return LORA_SM_IDLE;
@@ -157,13 +159,16 @@ static lora_sm_state_t lora_sm_state_processing(void) {
 #ifdef LORA_SM_DEBUG
     Serial.println("Packet is for me!");
 #endif
+    // Store received message in the global variable and set pending flag
+    memcpy(&lora_sm_received_msg, &msg, sizeof(lora_sm_msg_t));
+    lora_sm_received_msg_pending = true;
     /** @todo Implement message processing logic */
   } else {
 #ifdef LORA_SM_DEBUG
     Serial.println("Packet is not for me, ignoring...");
 #endif
   }
-
+  LoRa.receive();
   return LORA_SM_IDLE;
 }
 
@@ -232,6 +237,16 @@ bool lora_sm_request_to_send(lora_sm_msg_t *msg) {
   tx_head = (tx_head + 1) % LORA_SM_TX_QUEUE_SIZE;
   lora_sm_pending_to_send_count++;
   return true;
+}
+
+/** @brief Checks if a message is for the current node */
+bool lora_sm_message_for_me(lora_sm_msg_t *msg) {
+  if(lora_sm_received_msg_pending) {
+    memcpy(msg, &lora_sm_received_msg, sizeof(lora_sm_msg_t));
+    lora_sm_received_msg_pending = false;
+    return true;
+  }
+  return false;
 }
 
 #ifdef LORA_SM_DEBUG
