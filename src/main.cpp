@@ -43,7 +43,9 @@ void setup() {
 
 void loop() {
   // Network handling
+#ifdef DEBUG
   network_sm_state_t network_sm_prev = network_sm_get_state();
+#endif
   network_sm_state_t network_sm_curr = network_sm_run();
 
 #ifdef DEBUG
@@ -71,7 +73,7 @@ void loop() {
   lora_sm_state_t lora_sm_state = lora_sm_get_state();
   if(lora_sm_state != lora_sm_run()) {
 #ifdef DEBUG
-    char state_str[128];
+    char state_str[64];
     sprintf(state_str, "Transitioning from %s to %s", lora_sm_state_to_string(lora_sm_state), lora_sm_state_to_string(lora_sm_get_state()));
     Serial.println(state_str);
 #endif

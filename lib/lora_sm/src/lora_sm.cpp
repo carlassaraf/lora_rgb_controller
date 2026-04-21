@@ -15,7 +15,7 @@ static lora_configuration_t lora_sm_config = {
 static volatile bool lora_sm_packet_pending = false;
 
 // Pending data to be sent circular buffer
-#define LORA_SM_TX_QUEUE_SIZE 4
+#define LORA_SM_TX_QUEUE_SIZE 1
 static lora_sm_msg_t tx_queue[LORA_SM_TX_QUEUE_SIZE];
 static uint8_t tx_head = 0;
 static uint8_t tx_tail = 0;
