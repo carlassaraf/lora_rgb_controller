@@ -1,6 +1,7 @@
 #include "network_sm.h"
 
 #define TINY_GSM_MODEM_SIM7600
+#define MQTT_MAX_PACKET_SIZE 64
 
 #include <Arduino.h>
 #include <TinyGsmClient.h>
@@ -17,8 +18,8 @@ TinyGsmClient client(modem);
 // MQTT objects and variables
 static PubSubClient mqtt(client);
 
-static char mqtt_rx_topic[64];
-static char mqtt_rx_payload[128];
+static char mqtt_rx_topic[32];
+static char mqtt_rx_payload[32];
 static bool mqtt_msg_available = false;
 
 static uint32_t state_ts = 0;

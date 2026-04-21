@@ -23,7 +23,7 @@ typedef struct lora_sm_msg {
   uint8_t src_id;
   uint8_t ttl;
   lora_sm_msg_type_t type;
-  uint8_t payload[64];
+  uint8_t payload[32];
   uint8_t payload_len;
 } lora_sm_msg_t;
 
