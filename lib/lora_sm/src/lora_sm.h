@@ -42,7 +42,7 @@ lora_sm_state_t lora_sm_get_state(void);
 bool lora_sm_request_to_send(lora_sm_msg_t *msg);
 lora_sm_msg_t lora_sm_build_message(uint8_t dst_id, uint8_t src_id, uint8_t ttl, lora_sm_msg_type_t type, uint8_t *payload, uint8_t payload_len);
 
-#ifdef LORA_SM_DEBUG
+#ifdef DEBUG
 const char *lora_sm_state_to_string(lora_sm_state_t state);
 #endif
 
