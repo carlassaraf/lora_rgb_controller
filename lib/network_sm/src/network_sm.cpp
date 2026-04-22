@@ -1,324 +1,342 @@
 #include "network_sm.h"
-
-#define TINY_GSM_MODEM_SIM7600
-#define MQTT_MAX_PACKET_SIZE 64
-
 #include <Arduino.h>
-#include <TinyGsmClient.h>
-#include <PubSubClient.h>
+#include <string.h>
 
-// Current state machine status
-static network_sm_state_t network_sm_current_state = NETWORK_SM_INIT;
-// Current network configuration
-static network_configuration_t network_configuration = {0};
+// Current SM state
+static network_sm_state_t s_state = NETWORK_SM_INIT;
+// GPRS and MQTT configuration
+static network_configuration_t s_config = {0};
+static uint32_t s_ts = 0;
+static uint8_t  s_step = 0;
+static bool     s_cmd_sent = false;
 
-TinyGsm modem(Serial1);
-TinyGsmClient client(modem);
+// AT line reader
+static char    s_line[64];
+static uint8_t s_rx_pos = 0;
 
-// MQTT objects and variables
-static PubSubClient mqtt(client);
+static uint8_t s_recv_topic_len   = 0;
+static uint8_t s_recv_payload_len = 0;
 
-static char mqtt_rx_topic[32];
-static char mqtt_rx_payload[32];
-static bool mqtt_msg_available = false;
+// MQTT RX buffers
+static char s_mqtt_topic[32];
+static char s_mqtt_payload[32];
+static bool s_mqtt_available = false;
 
-static uint32_t state_ts = 0;
+// AT helpers
 
-// Helpers
-
-static inline bool config_is_valid(void) {
-  return (strlen(network_configuration.apn) > 0 &&
-          strlen(network_configuration.broker) > 0);
-}
-
-// MQTT callbacks
-
-/** @brief Handles sub message */
-static void mqtt_callback(char* topic, byte* payload, unsigned int len) {
-  memset(mqtt_rx_topic, 0, sizeof(mqtt_rx_topic));
-  memset(mqtt_rx_payload, 0, sizeof(mqtt_rx_payload));
-  // Copy data from sub message
-  strncpy(mqtt_rx_topic, topic, sizeof(mqtt_rx_topic) - 1);
-  for (unsigned int i = 0; i < len && i < sizeof(mqtt_rx_payload) - 1; i++) {
-    mqtt_rx_payload[i] = (char)payload[i];
+static bool at_readline(void) {
+  while (Serial1.available()) {
+    char c = (char)Serial1.read();
+    if (c == '\n') {
+      while (s_rx_pos > 0 && s_line[s_rx_pos - 1] == '\r') s_rx_pos--;
+      s_line[s_rx_pos] = '\0';
+      uint8_t len = s_rx_pos;
+      s_rx_pos = 0;
+      if (len > 0) return true;
+    } else if (c != '\r' && s_rx_pos < (uint8_t)(sizeof(s_line) - 1)) {
+      s_line[s_rx_pos++] = c;
+    }
   }
-  mqtt_msg_available = true;
+  return false;
 }
+
+static bool line_is(const char *s)     { return strcmp(s_line, s) == 0; }
+static bool line_starts(const char *s) { return strncmp(s_line, s, strlen(s)) == 0; }
+
+static void serial1_flush_rx(void) {
+  while (Serial1.available()) Serial1.read();
+  s_rx_pos = 0;
+}
+
+#ifdef DEBUG
+static bool at_readline_dbg(void) {
+  bool got = at_readline();
+  if (got) { Serial.print(F("< ")); Serial.println(s_line); }
+  return got;
+}
+#define AT_READLINE() at_readline_dbg()
+#else
+#define AT_READLINE() at_readline()
+#endif
 
 // State handlers
 
-/** @brief Initialize Serial interface and modem configuration */ 
-static network_sm_state_t network_sm_init(void) { 
-  // Validate configuration
-  if (!config_is_valid()) {
-  #ifdef DEBUG
-    Serial.println(F("Invalid network configuration"));
-  #endif
-    return NETWORK_SM_INIT;
+static network_sm_state_t network_sm_init(void) {
+  if (!s_cmd_sent) {
+    Serial1.begin(115200);
+    Serial1.println(F("AT+IPR=9600"));
+    delay(200);
+    Serial1.end();
+    Serial1.begin(9600);
+    Serial1.println(F("ATE0"));
+    s_ts = millis();
+    s_cmd_sent = true;
   }
-  // Initialize Serial communication and switch modem to 9600
-  Serial1.begin(115200);
-  Serial1.println(F("AT+IPR=9600"));
-  delay(200);
-#ifdef DEBUG
-  while(Serial1.available()) { Serial.print(Serial1.read()); }
-  Serial.println(); Serial.println(F("Changing baudrate to 9600..."));
-#endif
-  Serial1.end();
-  Serial1.begin(9600);
-#ifdef DEBUG
-  Serial.println(F("Network SM init done"));
-#endif 
-  return NETWORK_SM_MODEM_START;
+  if (AT_READLINE() && line_is("OK")) return NETWORK_SM_MODEM_START;
+  if (millis() - s_ts > 3000) { s_cmd_sent = false; }  // retry
+  return NETWORK_SM_INIT;
 }
 
-/** @brief Start/restart modem */
 static network_sm_state_t network_sm_modem_start(void) {
-#ifdef DEBUG
-  Serial.println(F("Initializing modem..."));
-#endif
-  modem.init();
-  state_ts = millis();
+  s_ts = millis();
   return NETWORK_SM_MODEM_WAIT;
 }
 
-/** @brief Wait for modem to stabilize */
 static network_sm_state_t network_sm_modem_wait(void) {
-  if (millis() - state_ts < 8000) {
-    return NETWORK_SM_MODEM_WAIT;
-  }
-#ifdef DEBUG
-  Serial.println(F("Modem ready"));
-#endif
-  state_ts = millis();
+  if (millis() - s_ts < 5000) return NETWORK_SM_MODEM_WAIT;
+  s_ts = millis();
   return NETWORK_SM_REGISTER_WAIT;
 }
 
-/** @brief Verify if module is connected to GPRS network */
 static network_sm_state_t network_sm_register_wait(void) {
-  if (modem.isNetworkConnected()) {
-#ifdef DEBUG
-    Serial.println(F("Network registered!"));
-#endif
-    return NETWORK_SM_GPRS_CONNECT;
+  if (!s_cmd_sent || millis() - s_ts > 5000) {
+    Serial1.println(F("AT+CEREG?"));
+    s_ts = millis();
+    s_cmd_sent = true;
   }
-  if (millis() - state_ts > 60000) {
-#ifdef DEBUG
-    Serial.println(F("Still not registered... waiting more"));
-#endif
-    state_ts = millis();
+  if (AT_READLINE() && line_starts("+CEREG:")) {
+    char *p = strrchr(s_line, ',');
+    uint8_t stat;
+    if (p) {
+      stat = (uint8_t)atoi(p + 1);
+    } else {
+      p = strchr(s_line, ':');
+      stat = p ? (uint8_t)atoi(p + 2) : 0;
+    }
+    if (stat == 1 || stat == 5) return NETWORK_SM_GPRS_CONNECT;
+    s_cmd_sent = false;
   }
   return NETWORK_SM_REGISTER_WAIT;
 }
 
-/** @brief Handles GPRS connection */
 static network_sm_state_t network_sm_gprs_connect(void) {
-#ifdef DEBUG
-  Serial.println(F("Connecting GPRS..."));
-  Serial.print(F("APN: "));
-  Serial.println(network_configuration.apn);
-#endif
-  modem.gprsDisconnect();
-  delay(1000);
-  modem.gprsConnect(network_configuration.apn, "", network_configuration.passwd);
-  state_ts = millis();
-  return NETWORK_SM_GPRS_WAIT;
+  if (!s_cmd_sent) {
+    Serial1.print(F("AT+CGDCONT=1,\"IP\",\""));
+    Serial1.print(s_config.apn);
+    Serial1.println('"');
+    s_ts = millis();
+    s_cmd_sent = true;
+  }
+  if (AT_READLINE()) {
+    if (line_is("OK") || line_is("ERROR")) return NETWORK_SM_GPRS_WAIT;
+  }
+  if (millis() - s_ts > 10000) return NETWORK_SM_RECONNECT;
+  return NETWORK_SM_GPRS_CONNECT;
 }
 
-/** @brief  */
 static network_sm_state_t network_sm_gprs_wait(void) {
-  if (modem.isGprsConnected()) {
-    client.setTimeout(10000);
-#ifdef DEBUG
-    Serial.println(F("GPRS connected!"));
-#endif
+  if (!s_cmd_sent || millis() - s_ts > 5000) {
+    Serial1.println(F("AT+CGPADDR=1"));
+    s_ts = millis();
+    s_cmd_sent = true;
+  }
+  if (AT_READLINE() && line_starts("+CGPADDR: 1,") && strlen(s_line) > 12 && !strstr(s_line, "0.0.0.0")) {
     return NETWORK_SM_NETWORK_WAIT;
   }
-  if (millis() - state_ts > 30000) {
-#ifdef DEBUG
-    Serial.println(F("GPRS timeout -> reconnect"));
-#endif
-    return NETWORK_SM_RECONNECT;
-  }
   return NETWORK_SM_GPRS_WAIT;
 }
 
-/** @brief  */
 static network_sm_state_t network_sm_network_wait(void) {
   return NETWORK_SM_MQTT_CONNECT;
 }
 
-/** @brief Handles connection to MQTT broker */
 static network_sm_state_t network_sm_mqtt_connect(void) {
-
-  if (state_ts != 0 && millis() - state_ts < 5000) {
-    return NETWORK_SM_MQTT_CONNECT;
+  if (!s_cmd_sent) {
+    switch (s_step) {
+      case 0: Serial1.println(F("AT+CMQTTSTART")); break;
+      case 1:
+        Serial1.print(F("AT+CMQTTACCQ=0,\""));
+        Serial1.print(s_config.id);
+        Serial1.println(F("\",0"));
+        break;
+      case 2:
+        Serial1.print(F("AT+CMQTTCONNECT=0,\"tcp://"));
+        Serial1.print(s_config.broker);
+        Serial1.println(F(":1883\",60,1"));
+        break;
+    }
+    s_ts = millis();
+    s_cmd_sent = true;
   }
 
-#ifdef DEBUG
-  Serial.println(F("Connecting to MQTT broker..."));
-  Serial.print(F("Broker: "));
-  Serial.println(network_configuration.broker);
-#endif
-
-  mqtt.setServer(network_configuration.broker, 1883);
-  mqtt.setCallback(mqtt_callback);
-
-  if (mqtt.connect(network_configuration.id, NULL, NULL)) {
-#ifdef DEBUG
-    Serial.println(F("MQTT connected!"));
-#endif
-    state_ts = millis();
-    return NETWORK_SM_MQTT_WAIT;
+  if (AT_READLINE()) {
+    if (s_step == 0) {
+      if (line_starts("+CMQTTSTART:")) {
+        char *p = strchr(s_line, ':');
+        int code = p ? atoi(p + 2) : -1;
+        if (code == 0 || code == 23) { s_step++; s_cmd_sent = false; }
+        else return NETWORK_SM_RECONNECT;
+      } else if (line_is("OK")) {
+        s_step++; s_cmd_sent = false;
+      } else if (line_is("ERROR")) return NETWORK_SM_RECONNECT;
+    } else if (s_step == 1) {
+      if (line_is("OK")) { s_step++; s_cmd_sent = false; }
+      else if (line_is("ERROR")) return NETWORK_SM_RECONNECT;
+    } else if (s_step == 2) {
+      if (line_starts("+CMQTTCONNECT:")) {
+        char *p = strrchr(s_line, ',');
+        if (p && atoi(p + 1) == 0) return NETWORK_SM_MQTT_SUBSCRIBE;
+        return NETWORK_SM_RECONNECT;
+      } else if (line_is("ERROR")) return NETWORK_SM_RECONNECT;
+    }
   }
-
-#ifdef DEBUG
-  Serial.print(F("MQTT state: "));
-  Serial.println(mqtt.state());
-  Serial.println(F("MQTT connect failed -> retry"));
-#endif
-
-  state_ts = millis();
+  if (millis() - s_ts > 15000) return NETWORK_SM_RECONNECT;
   return NETWORK_SM_MQTT_CONNECT;
 }
 
-/** @brief Runs MQTT client before subscribing */
 static network_sm_state_t network_sm_mqtt_wait(void) {
-
-  mqtt.loop();
-  if (millis() - state_ts < 500) {
-    return NETWORK_SM_MQTT_WAIT;
-  }
   return NETWORK_SM_MQTT_SUBSCRIBE;
 }
 
-/** @brief Handles subscription to topic */
 static network_sm_state_t network_sm_mqtt_subscribe(void) {
-
-#ifdef DEBUG
-  Serial.print(F("Subscribing to topic: "));
-  Serial.println(network_configuration.topic);
-#endif
-
-  mqtt.loop();
-
-  if (mqtt.subscribe(network_configuration.topic, 0)) {
-#ifdef DEBUG
-    Serial.println(F("MQTT subscribed!"));
-#endif
-    return NETWORK_SM_READY;
+  if (s_step == 0) {
+    if (!s_cmd_sent) {
+      uint8_t tlen = (uint8_t)strlen(s_config.topic);
+      Serial1.print(F("AT+CMQTTSUB=0,"));
+      Serial1.print(tlen);
+      Serial1.println(F(",0"));
+      s_ts = millis();
+      s_cmd_sent = true;
+    }
+    // '>' prompt has no newline — scan raw serial for it
+    while (Serial1.available()) {
+      if ((char)Serial1.read() == '>') { s_step = 1; s_cmd_sent = false; break; }
+    }
+  } else {
+    if (!s_cmd_sent) {
+      Serial1.println(s_config.topic);
+      s_ts = millis();
+      s_cmd_sent = true;
+    }
+    if (AT_READLINE()) {
+      if (line_starts("+CMQTTSUB:")) {
+        char *p = strrchr(s_line, ',');
+        if (p && atoi(p + 1) == 0) return NETWORK_SM_READY;
+        return NETWORK_SM_RECONNECT;
+      }
+      if (line_is("ERROR")) return NETWORK_SM_RECONNECT;
+    }
   }
-
-#ifdef DEBUG
-  Serial.print(F("Subscribe failed, state: "));
-  Serial.println(mqtt.state());
-#endif
-  return NETWORK_SM_RECONNECT;
+  if (millis() - s_ts > 10000) return NETWORK_SM_RECONNECT;
+  return NETWORK_SM_MQTT_SUBSCRIBE;
 }
 
-/** @brief Network state machine ready */
 static network_sm_state_t network_sm_ready(void) {
+  if (!at_readline()) return NETWORK_SM_READY;
 
-  if (!modem.isGprsConnected()) {
-#ifdef DEBUG
-    Serial.println(F("Lost GPRS -> reconnect"));
-#endif
+  if (line_starts("+CMQTTCONNLOST:") || line_starts("+CMQTTNONET:")) {
     return NETWORK_SM_RECONNECT;
   }
 
-  if (!mqtt.connected()) {
-#ifdef DEBUG
-    Serial.println(F("Lost MQTT -> reconnect"));
-#endif
-    return NETWORK_SM_MQTT_CONNECT;
+  // A76XX receive sequence:
+  // step 0: +CMQTTRXSTART: 0,<topic_len>,<payload_len>
+  // step 1: +CMQTTRXTOPIC: 0,<topic_len>
+  // step 2: <topic data>
+  // step 3: +CMQTTRXPAYLOAD: 0,<payload_len>
+  // step 4: <payload data>
+  if (s_step == 0 && line_starts("+CMQTTRXSTART: 0,")) {
+    const char *p = s_line + sizeof("+CMQTTRXSTART: 0,") - 1;
+    s_recv_topic_len   = (uint8_t)atoi(p);
+    p = strchr(p, ',');
+    s_recv_payload_len = p ? (uint8_t)atoi(p + 1) : 0;
+    s_step = 1;
+  } else if (s_step == 1 && line_starts("+CMQTTRXTOPIC:")) {
+    s_step = 2;
+  } else if (s_step == 2) {
+    uint8_t tc = (s_recv_topic_len < sizeof(s_mqtt_topic) - 1) ? s_recv_topic_len : sizeof(s_mqtt_topic) - 1;
+    memcpy(s_mqtt_topic, s_line, tc);
+    s_mqtt_topic[tc] = '\0';
+    s_step = 3;
+  } else if (s_step == 3 && line_starts("+CMQTTRXPAYLOAD:")) {
+    s_step = 4;
+  } else if (s_step == 4) {
+    uint8_t pc = (s_recv_payload_len < sizeof(s_mqtt_payload) - 1) ? s_recv_payload_len : sizeof(s_mqtt_payload) - 1;
+    memcpy(s_mqtt_payload, s_line, pc);
+    s_mqtt_payload[pc] = '\0';
+    s_mqtt_available = true;
+    s_step = 0;
   }
-  mqtt.loop();
   return NETWORK_SM_READY;
 }
 
-/** @brief Handles Network reconnection */
 static network_sm_state_t network_sm_reconnect(void) {
-#ifdef DEBUG
-  Serial.println(F("Reconnecting..."));
-#endif
-  state_ts = millis();
+  Serial1.println(F("AT+CMQTTDISC=0,120"));
+  delay(500);
+  Serial1.println(F("AT+CMQTTSTOP"));
+  delay(1000);
   return NETWORK_SM_GPRS_CONNECT;
 }
 
-/** @brief Handles Network error */
 static network_sm_state_t network_sm_error(void) {
-#ifdef DEBUG
-  Serial.println(F("Network SM error"));
-#endif
   return NETWORK_SM_ERROR;
 }
 
-/** @brief State handlers */
-static network_sm_state_t (*sm_handlers[])(void) = {
-  [NETWORK_SM_INIT]            = network_sm_init,
-  [NETWORK_SM_MODEM_START]     = network_sm_modem_start,
-  [NETWORK_SM_MODEM_WAIT]      = network_sm_modem_wait,
-  [NETWORK_SM_REGISTER_WAIT]   = network_sm_register_wait,
-  [NETWORK_SM_GPRS_CONNECT]    = network_sm_gprs_connect,
-  [NETWORK_SM_GPRS_WAIT]       = network_sm_gprs_wait,
-  [NETWORK_SM_NETWORK_WAIT]    = network_sm_network_wait,
-  [NETWORK_SM_MQTT_CONNECT]    = network_sm_mqtt_connect,
-  [NETWORK_SM_MQTT_SUBSCRIBE]  = network_sm_mqtt_subscribe,
-  [NETWORK_SM_READY]           = network_sm_ready,
-  [NETWORK_SM_RECONNECT]       = network_sm_reconnect,
-  [NETWORK_SM_MQTT_WAIT]       = network_sm_mqtt_wait,
-  [NETWORK_SM_ERROR]           = network_sm_error,
+static network_sm_state_t (*s_handlers[])(void) = {
+  [NETWORK_SM_INIT]           = network_sm_init,
+  [NETWORK_SM_MODEM_START]    = network_sm_modem_start,
+  [NETWORK_SM_MODEM_WAIT]     = network_sm_modem_wait,
+  [NETWORK_SM_REGISTER_WAIT]  = network_sm_register_wait,
+  [NETWORK_SM_GPRS_CONNECT]   = network_sm_gprs_connect,
+  [NETWORK_SM_GPRS_WAIT]      = network_sm_gprs_wait,
+  [NETWORK_SM_NETWORK_WAIT]   = network_sm_network_wait,
+  [NETWORK_SM_MQTT_CONNECT]   = network_sm_mqtt_connect,
+  [NETWORK_SM_MQTT_SUBSCRIBE] = network_sm_mqtt_subscribe,
+  [NETWORK_SM_READY]          = network_sm_ready,
+  [NETWORK_SM_RECONNECT]      = network_sm_reconnect,
+  [NETWORK_SM_MQTT_WAIT]      = network_sm_mqtt_wait,
+  [NETWORK_SM_ERROR]          = network_sm_error,
 };
 
+// ---------------------------------------------------------------------------
 // Public API
+// ---------------------------------------------------------------------------
 
 bool network_sm_set_configuration(network_configuration_t *config) {
   if (!config) return false;
-  memcpy(&network_configuration, config, sizeof(network_configuration_t));
-  network_sm_current_state = NETWORK_SM_INIT;
+  memcpy(&s_config, config, sizeof(network_configuration_t));
+  s_state = NETWORK_SM_INIT;
   return true;
 }
 
-network_sm_state_t network_sm_get_state(void) {
-  return network_sm_current_state;
-}
+network_sm_state_t network_sm_get_state(void) { return s_state; }
 
 network_sm_state_t network_sm_run(void) {
-  network_sm_current_state = sm_handlers[network_sm_current_state]();
-  return network_sm_current_state;
+  network_sm_state_t next = s_handlers[s_state]();
+  if (next != s_state) {
+    s_cmd_sent = false;
+    s_step     = 0;
+    serial1_flush_rx();   // evita leer respuestas del estado anterior
+  }
+  s_state = next;
+  return s_state;
 }
 
-bool network_sm_mqtt_message_available(void) {
-  return mqtt_msg_available;
-}
+bool network_sm_mqtt_message_available(void) { return s_mqtt_available; }
 
 void network_sm_mqtt_get_message(char *topic, char *payload) {
-  if (!mqtt_msg_available) return;
-
-  strcpy(topic, mqtt_rx_topic);
-  strcpy(payload, mqtt_rx_payload);
-
-  mqtt_msg_available = false;
+  if (!s_mqtt_available) return;
+  strcpy(topic,   s_mqtt_topic);
+  strcpy(payload, s_mqtt_payload);
+  s_mqtt_available = false;
 }
-
-// Debug functions
 
 #ifdef DEBUG
 const char *network_sm_state_to_string(network_sm_state_t state) {
   switch (state) {
-    case NETWORK_SM_INIT: return "INIT";
-    case NETWORK_SM_MODEM_START: return "MODEM_START";
-    case NETWORK_SM_MODEM_WAIT: return "MODEM_WAIT";
-    case NETWORK_SM_REGISTER_WAIT: return "REGISTER_WAIT";
-    case NETWORK_SM_GPRS_CONNECT: return "GPRS_CONNECT";
-    case NETWORK_SM_GPRS_WAIT: return "GPRS_WAIT";
-    case NETWORK_SM_NETWORK_WAIT: return "NETWORK_WAIT";
-    case NETWORK_SM_MQTT_CONNECT: return "MQTT_CONNECT";
+    case NETWORK_SM_INIT:           return "INIT";
+    case NETWORK_SM_MODEM_START:    return "MODEM_START";
+    case NETWORK_SM_MODEM_WAIT:     return "MODEM_WAIT";
+    case NETWORK_SM_REGISTER_WAIT:  return "REGISTER_WAIT";
+    case NETWORK_SM_GPRS_CONNECT:   return "GPRS_CONNECT";
+    case NETWORK_SM_GPRS_WAIT:      return "GPRS_WAIT";
+    case NETWORK_SM_NETWORK_WAIT:   return "NETWORK_WAIT";
+    case NETWORK_SM_MQTT_CONNECT:   return "MQTT_CONNECT";
     case NETWORK_SM_MQTT_SUBSCRIBE: return "MQTT_SUBSCRIBE";
-    case NETWORK_SM_READY: return "READY";
-    case NETWORK_SM_RECONNECT: return "RECONNECT";
-    case NETWORK_SM_ERROR: return "ERROR";
-    default: return "UNKNOWN";
+    case NETWORK_SM_READY:          return "READY";
+    case NETWORK_SM_RECONNECT:      return "RECONNECT";
+    case NETWORK_SM_MQTT_WAIT:      return "MQTT_WAIT";
+    case NETWORK_SM_ERROR:          return "ERROR";
+    default:                        return "UNKNOWN";
   }
 }
 #endif
