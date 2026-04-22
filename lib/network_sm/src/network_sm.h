@@ -17,19 +17,19 @@ typedef struct {
  * @brief Network state machine states
  */
 typedef enum {
-  NETWORK_SM_INIT = 0,        ///< Initialize serial and configuration
-  NETWORK_SM_MODEM_START,     ///< Start/restart modem
-  NETWORK_SM_MODEM_WAIT,      ///< Wait modem stabilization
-  NETWORK_SM_REGISTER_WAIT,   ///< Wait for network registration
-  NETWORK_SM_GPRS_CONNECT,    ///< Attempt GPRS connection
-  NETWORK_SM_GPRS_WAIT,       ///< Wait for GPRS connection
-  NETWORK_SM_NETWORK_WAIT,    ///< Intermediate state before MQTT
-  NETWORK_SM_MQTT_CONNECT,    ///< Connect to MQTT broker
-  NETWORK_SM_MQTT_SUBSCRIBE,  ///< Subscribe to topic
-  NETWORK_SM_READY,           ///< Fully operational (MQTT loop active)
-  NETWORK_SM_RECONNECT,       ///< Recover from connection loss
-  NETWORK_SM_MQTT_WAIT,       ///< Run MQTT client briefly
-  NETWORK_SM_ERROR            ///< Fatal error state
+  NETWORK_SM_INIT = 0,        /*< Initialize serial and configuration */
+  NETWORK_SM_MODEM_START,     /*< Start/restart modem */
+  NETWORK_SM_MODEM_WAIT,      /*< Wait modem stabilization */
+  NETWORK_SM_REGISTER_WAIT,   /*< Wait for network registration */
+  NETWORK_SM_GPRS_CONNECT,    /*< Attempt GPRS connection */
+  NETWORK_SM_GPRS_WAIT,       /*< Wait for GPRS connection */
+  NETWORK_SM_NETWORK_WAIT,    /*< Intermediate state before MQTT */
+  NETWORK_SM_MQTT_CONNECT,    /*< Connect to MQTT broker */
+  NETWORK_SM_MQTT_SUBSCRIBE,  /*< Subscribe to topic */
+  NETWORK_SM_READY,           /*< Fully operational (MQTT loop active) */
+  NETWORK_SM_RECONNECT,       /*< Recover from connection loss */
+  NETWORK_SM_MQTT_WAIT,       /*< Run MQTT client briefly */
+  NETWORK_SM_ERROR            /*< Fatal error state */
 } network_sm_state_t;
 
 // API
