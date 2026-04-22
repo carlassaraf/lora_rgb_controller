@@ -3,17 +3,22 @@
 
 #define SPI_CLOCK SD_SCK_MHZ(2)
 
-static sd_sm_state_t s_state = SD_SM_INIT;
-static SdFat32 sd;
-static File32 file;
-static int8_t s_cs_pin = -1;
+static sd_sm_state_t s_state   = SD_SM_INIT;
+static SdFat32       sd;
+static File32        file;
+static int8_t        s_cs_pin  = -1;  // set by sd_manager_init()
 
-static char s_filename[32];
-static uint8_t *s_buf = NULL;
+static char     s_filename[32];   // requested filename; cleared on open or error
+static uint8_t *s_buf      = NULL;
 static uint16_t s_buf_size = 0;
 static uint16_t s_bytes_read = 0;
-static bool s_eof = false;
+static bool     s_eof = false;    // set when file.available() == 0 after a read
 
+// ---------------------------------------------------------------------------
+// State handlers
+// ---------------------------------------------------------------------------
+
+/** @brief Mounts the SD card. Returns ERROR if cs_pin was not set or mount fails. */
 static sd_sm_state_t sd_sm_init(void) {
   if (s_cs_pin < 0) return SD_SM_ERROR;
   if (!sd.begin(SdSpiConfig(s_cs_pin, SHARED_SPI, SPI_CLOCK))) {
@@ -28,11 +33,13 @@ static sd_sm_state_t sd_sm_init(void) {
   return SD_SM_IDLE;
 }
 
+/** @brief Waits for a file request; transitions to OPEN as soon as s_filename is set. */
 static sd_sm_state_t sd_sm_idle(void) {
   if (s_filename[0] != '\0') return SD_SM_OPEN;
   return SD_SM_IDLE;
 }
 
+/** @brief Opens the requested file for reading. Falls back to IDLE if not found. */
 static sd_sm_state_t sd_sm_open(void) {
   if (!file.open(s_filename, O_RDONLY)) {
 #ifdef DEBUG
@@ -50,6 +57,7 @@ static sd_sm_state_t sd_sm_open(void) {
   return SD_SM_READ;
 }
 
+/** @brief Reads up to s_buf_size bytes into s_buf. Sets s_eof when no more data remains. */
 static sd_sm_state_t sd_sm_read(void) {
   int32_t n = file.read(s_buf, s_buf_size);
   if (n < 0) {
@@ -66,16 +74,19 @@ static sd_sm_state_t sd_sm_read(void) {
   return SD_SM_DATA_READY;
 }
 
+/** @brief Not used in the normal read path; kept for state table completeness. */
 static sd_sm_state_t sd_sm_close(void) {
   file.close();
   s_filename[0] = '\0';
   return SD_SM_DATA_READY;
 }
 
+/** @brief Holds DATA_READY until the caller consumes the chunk via sd_manager_consume(). */
 static sd_sm_state_t sd_sm_data_ready(void) {
   return SD_SM_DATA_READY;
 }
 
+/** @brief Holds ERROR until a new request resets the SM to INIT. */
 static sd_sm_state_t sd_sm_error(void) {
   return SD_SM_ERROR;
 }
@@ -89,6 +100,10 @@ static sd_sm_state_t (*s_handlers[])(void) = {
   [SD_SM_DATA_READY] = sd_sm_data_ready,
   [SD_SM_ERROR]      = sd_sm_error,
 };
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
 void sd_manager_init(uint8_t cs_pin) {
   s_cs_pin = (int8_t)cs_pin;

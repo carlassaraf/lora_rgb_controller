@@ -2,28 +2,33 @@
 #include <Arduino.h>
 #include <string.h>
 
-// Current SM state
-static network_sm_state_t s_state = NETWORK_SM_INIT;
-// GPRS and MQTT configuration
+static network_sm_state_t   s_state    = NETWORK_SM_INIT;
 static network_configuration_t s_config = {0};
-static uint32_t s_ts = 0;
-static uint8_t  s_step = 0;
-static bool     s_cmd_sent = false;
+static uint32_t s_ts       = 0;    // timestamp used for timeouts within each state
+static uint8_t  s_step     = 0;    // sub-step counter for states that issue multiple AT commands
+static bool     s_cmd_sent = false; // prevents re-sending a command before its response arrives
 
-// AT line reader
-static char    s_line[64];
-static uint8_t s_rx_pos = 0;
+// AT line reader state
+static char    s_line[64];   // last complete line received from Serial1
+static uint8_t s_rx_pos = 0; // write position in s_line
 
+// MQTT receive reassembly counters (populated from +CMQTTRXSTART URC)
 static uint8_t s_recv_topic_len   = 0;
 static uint8_t s_recv_payload_len = 0;
 
-// MQTT RX buffers
+// Last received MQTT message (valid while s_mqtt_available is true)
 static char s_mqtt_topic[32];
 static char s_mqtt_payload[32];
 static bool s_mqtt_available = false;
 
+// ---------------------------------------------------------------------------
 // AT helpers
+// ---------------------------------------------------------------------------
 
+/**
+ * @brief Read from Serial1 into s_line until a complete non-empty line arrives.
+ * @return true when a line is ready in s_line (CR stripped), false otherwise.
+ */
 static bool at_readline(void) {
   while (Serial1.available()) {
     char c = (char)Serial1.read();
@@ -40,9 +45,13 @@ static bool at_readline(void) {
   return false;
 }
 
+/** @brief Returns true if s_line exactly matches s. */
 static bool line_is(const char *s)     { return strcmp(s_line, s) == 0; }
+
+/** @brief Returns true if s_line starts with the prefix s. */
 static bool line_starts(const char *s) { return strncmp(s_line, s, strlen(s)) == 0; }
 
+/** @brief Discard all pending Serial1 bytes and reset the line buffer. */
 static void serial1_flush_rx(void) {
   while (Serial1.available()) Serial1.read();
   s_rx_pos = 0;
@@ -59,8 +68,14 @@ static bool at_readline_dbg(void) {
 #define AT_READLINE() at_readline()
 #endif
 
+// ---------------------------------------------------------------------------
 // State handlers
+// ---------------------------------------------------------------------------
 
+/**
+ * @brief Start Serial1 at 115200, lock it to 9600 via AT+IPR, then disable echo.
+ * @note Retries every 3 s until the modem acknowledges ATE0 with OK.
+ */
 static network_sm_state_t network_sm_init(void) {
   if (!s_cmd_sent) {
     Serial1.begin(115200);
@@ -77,17 +92,23 @@ static network_sm_state_t network_sm_init(void) {
   return NETWORK_SM_INIT;
 }
 
+/** @brief Record the current time so MODEM_WAIT can measure the stabilization delay. */
 static network_sm_state_t network_sm_modem_start(void) {
   s_ts = millis();
   return NETWORK_SM_MODEM_WAIT;
 }
 
+/** @brief Block for 5 s to allow the A76XX firmware to finish its internal start-up. */
 static network_sm_state_t network_sm_modem_wait(void) {
   if (millis() - s_ts < 5000) return NETWORK_SM_MODEM_WAIT;
   s_ts = millis();
   return NETWORK_SM_REGISTER_WAIT;
 }
 
+/**
+ * @brief Poll AT+CEREG? every 5 s until the modem reports registered (stat 1 or 5).
+ * @note Handles both +CEREG: <stat> and +CEREG: <n>,<stat> response formats.
+ */
 static network_sm_state_t network_sm_register_wait(void) {
   if (!s_cmd_sent || millis() - s_ts > 5000) {
     Serial1.println(F("AT+CEREG?"));
@@ -109,6 +130,11 @@ static network_sm_state_t network_sm_register_wait(void) {
   return NETWORK_SM_REGISTER_WAIT;
 }
 
+/**
+ * @brief Send AT+CGDCONT to define the PDP context with the configured APN.
+ * @note Both OK and ERROR advance to GPRS_WAIT — ERROR is acceptable because
+ *       the context may already be defined from a previous session.
+ */
 static network_sm_state_t network_sm_gprs_connect(void) {
   if (!s_cmd_sent) {
     Serial1.print(F("AT+CGDCONT=1,\"IP\",\""));
@@ -124,6 +150,10 @@ static network_sm_state_t network_sm_gprs_connect(void) {
   return NETWORK_SM_GPRS_CONNECT;
 }
 
+/**
+ * @brief Poll AT+CGPADDR every 5 s until the modem reports a non-zero IP address.
+ * @note Rejects 0.0.0.0 which the modem reports while the PDP context is still activating.
+ */
 static network_sm_state_t network_sm_gprs_wait(void) {
   if (!s_cmd_sent || millis() - s_ts > 5000) {
     Serial1.println(F("AT+CGPADDR=1"));
@@ -136,10 +166,20 @@ static network_sm_state_t network_sm_gprs_wait(void) {
   return NETWORK_SM_GPRS_WAIT;
 }
 
+/** @brief Pass-through; reserved for future pre-MQTT logic. */
 static network_sm_state_t network_sm_network_wait(void) {
   return NETWORK_SM_MQTT_CONNECT;
 }
 
+/**
+ * @brief Run the three-step MQTT connection sequence.
+ *
+ * Step 0: AT+CMQTTSTART  — start the MQTT service (code 23 = already running).
+ * Step 1: AT+CMQTTACCQ   — acquire client slot 0 with the configured client ID.
+ * Step 2: AT+CMQTTCONNECT — connect to the broker on port 1883, keepalive 60 s.
+ *
+ * Any ERROR or a 15 s overall timeout triggers RECONNECT.
+ */
 static network_sm_state_t network_sm_mqtt_connect(void) {
   if (!s_cmd_sent) {
     switch (s_step) {
@@ -184,10 +224,20 @@ static network_sm_state_t network_sm_mqtt_connect(void) {
   return NETWORK_SM_MQTT_CONNECT;
 }
 
+/** @brief Unused pass-through; transitions immediately to MQTT_SUBSCRIBE. */
 static network_sm_state_t network_sm_mqtt_wait(void) {
   return NETWORK_SM_MQTT_SUBSCRIBE;
 }
 
+/**
+ * @brief Subscribe to the configured topic via AT+CMQTTSUB.
+ *
+ * The A76XX CMQTTSUB command sends the topic length first, then waits for a
+ * raw '>' prompt (no newline) before accepting the topic string.
+ *
+ * Step 0: send AT+CMQTTSUB=0,<len>,0 and scan for '>' in the raw serial stream.
+ * Step 1: send the topic string and wait for +CMQTTSUB: 0,0 (success).
+ */
 static network_sm_state_t network_sm_mqtt_subscribe(void) {
   if (s_step == 0) {
     if (!s_cmd_sent) {
@@ -221,6 +271,19 @@ static network_sm_state_t network_sm_mqtt_subscribe(void) {
   return NETWORK_SM_MQTT_SUBSCRIBE;
 }
 
+/**
+ * @brief MQTT receive loop — parses A76XX message URCs and detects disconnection.
+ *
+ * The A76XX delivers each incoming message as five consecutive URCs:
+ *   +CMQTTRXSTART: 0,<topic_len>,<payload_len>
+ *   +CMQTTRXTOPIC: 0,<topic_len>
+ *   <topic string>
+ *   +CMQTTRXPAYLOAD: 0,<payload_len>
+ *   <payload string>
+ *
+ * s_step tracks which URC is expected next (0 = idle, 1–4 = mid-receive).
+ * +CMQTTCONNLOST / +CMQTTNONET trigger an immediate RECONNECT.
+ */
 static network_sm_state_t network_sm_ready(void) {
   if (!at_readline()) return NETWORK_SM_READY;
 
@@ -228,12 +291,6 @@ static network_sm_state_t network_sm_ready(void) {
     return NETWORK_SM_RECONNECT;
   }
 
-  // A76XX receive sequence:
-  // step 0: +CMQTTRXSTART: 0,<topic_len>,<payload_len>
-  // step 1: +CMQTTRXTOPIC: 0,<topic_len>
-  // step 2: <topic data>
-  // step 3: +CMQTTRXPAYLOAD: 0,<payload_len>
-  // step 4: <payload data>
   if (s_step == 0 && line_starts("+CMQTTRXSTART: 0,")) {
     const char *p = s_line + sizeof("+CMQTTRXSTART: 0,") - 1;
     s_recv_topic_len   = (uint8_t)atoi(p);
@@ -259,6 +316,10 @@ static network_sm_state_t network_sm_ready(void) {
   return NETWORK_SM_READY;
 }
 
+/**
+ * @brief Gracefully disconnect from MQTT and restart from GPRS_CONNECT.
+ * @note Uses blocking delays; acceptable here since this is an error-recovery path.
+ */
 static network_sm_state_t network_sm_reconnect(void) {
   Serial1.println(F("AT+CMQTTDISC=0,120"));
   delay(500);
@@ -267,6 +328,7 @@ static network_sm_state_t network_sm_reconnect(void) {
   return NETWORK_SM_GPRS_CONNECT;
 }
 
+/** @brief Fatal error sink; the SM halts here until reset. */
 static network_sm_state_t network_sm_error(void) {
   return NETWORK_SM_ERROR;
 }
@@ -305,7 +367,7 @@ network_sm_state_t network_sm_run(void) {
   if (next != s_state) {
     s_cmd_sent = false;
     s_step     = 0;
-    serial1_flush_rx();   // evita leer respuestas del estado anterior
+    serial1_flush_rx();
   }
   s_state = next;
   return s_state;
