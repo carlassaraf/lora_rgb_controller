@@ -17,9 +17,9 @@
 /** @brief Runtime configuration passed once before the first network_sm_run() call. */
 typedef struct {
   char id[32];      /**< MQTT client identifier string. */
-  char apn[64];     /**< Mobile network APN (e.g. "datos.personal.com"). */
-  char broker[64];  /**< MQTT broker hostname or IP address. */
-  char topic[64];   /**< MQTT topic to subscribe to. */
+  char apn[32];     /**< Mobile network APN (e.g. "datos.personal.com"). */
+  char broker[32];  /**< MQTT broker hostname or IP address. */
+  char topic[32];   /**< MQTT topic to subscribe to. */
   char user[32];    /**< MQTT username; leave empty if the broker has no auth. */
   char passwd[32];  /**< MQTT password; leave empty if the broker has no auth. */
 } network_configuration_t;
@@ -73,9 +73,9 @@ bool network_sm_mqtt_message_available(void);
  */
 void network_sm_mqtt_get_message(char *topic, char *payload);
 
-#ifdef DEBUG
-/** @brief Returns a human-readable name for the given state (DEBUG builds only). */
-const char *network_sm_state_to_string(network_sm_state_t state);
-#endif
+// #ifdef DEBUG
+// /** @brief Returns a human-readable name for the given state (DEBUG builds only). */
+// const char *network_sm_state_to_string(network_sm_state_t state);
+// #endif
 
 #endif

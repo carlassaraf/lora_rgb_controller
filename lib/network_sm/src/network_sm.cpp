@@ -9,7 +9,7 @@ static uint8_t  s_step     = 0;    // sub-step counter for states that issue mul
 static bool     s_cmd_sent = false; // prevents re-sending a command before its response arrives
 
 // AT line reader state
-static char    s_line[64];   // last complete line received from Serial1
+static char    s_line[32];   // last complete line received from Serial1
 static uint8_t s_rx_pos = 0; // write position in s_line
 
 // MQTT receive reassembly counters (populated from +CMQTTRXSTART URC)
@@ -17,8 +17,8 @@ static uint8_t s_recv_topic_len   = 0;
 static uint8_t s_recv_payload_len = 0;
 
 // Last received MQTT message (valid while s_mqtt_available is true)
-static char s_mqtt_topic[32];
-static char s_mqtt_payload[32];
+static char s_mqtt_topic[16];
+static char s_mqtt_payload[16];
 static bool s_mqtt_available = false;
 
 // ---------------------------------------------------------------------------
@@ -382,23 +382,23 @@ void network_sm_mqtt_get_message(char *topic, char *payload) {
   s_mqtt_available = false;
 }
 
-#ifdef DEBUG
-const char *network_sm_state_to_string(network_sm_state_t state) {
-  switch (state) {
-    case NETWORK_SM_INIT:           return "INIT";
-    case NETWORK_SM_MODEM_START:    return "MODEM_START";
-    case NETWORK_SM_MODEM_WAIT:     return "MODEM_WAIT";
-    case NETWORK_SM_REGISTER_WAIT:  return "REGISTER_WAIT";
-    case NETWORK_SM_GPRS_CONNECT:   return "GPRS_CONNECT";
-    case NETWORK_SM_GPRS_WAIT:      return "GPRS_WAIT";
-    case NETWORK_SM_NETWORK_WAIT:   return "NETWORK_WAIT";
-    case NETWORK_SM_MQTT_CONNECT:   return "MQTT_CONNECT";
-    case NETWORK_SM_MQTT_SUBSCRIBE: return "MQTT_SUBSCRIBE";
-    case NETWORK_SM_READY:          return "READY";
-    case NETWORK_SM_RECONNECT:      return "RECONNECT";
-    case NETWORK_SM_MQTT_WAIT:      return "MQTT_WAIT";
-    case NETWORK_SM_ERROR:          return "ERROR";
-    default:                        return "UNKNOWN";
-  }
-}
-#endif
+// #ifdef DEBUG
+// const char *network_sm_state_to_string(network_sm_state_t state) {
+//   switch (state) {
+//     case NETWORK_SM_INIT:           return "INIT";
+//     case NETWORK_SM_MODEM_START:    return "MODEM_START";
+//     case NETWORK_SM_MODEM_WAIT:     return "MODEM_WAIT";
+//     case NETWORK_SM_REGISTER_WAIT:  return "REGISTER_WAIT";
+//     case NETWORK_SM_GPRS_CONNECT:   return "GPRS_CONNECT";
+//     case NETWORK_SM_GPRS_WAIT:      return "GPRS_WAIT";
+//     case NETWORK_SM_NETWORK_WAIT:   return "NETWORK_WAIT";
+//     case NETWORK_SM_MQTT_CONNECT:   return "MQTT_CONNECT";
+//     case NETWORK_SM_MQTT_SUBSCRIBE: return "MQTT_SUBSCRIBE";
+//     case NETWORK_SM_READY:          return "READY";
+//     case NETWORK_SM_RECONNECT:      return "RECONNECT";
+//     case NETWORK_SM_MQTT_WAIT:      return "MQTT_WAIT";
+//     case NETWORK_SM_ERROR:          return "ERROR";
+//     default:                        return "UNKNOWN";
+//   }
+// }
+// #endif
