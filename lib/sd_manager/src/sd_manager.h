@@ -74,9 +74,9 @@ uint16_t sd_manager_get_bytes_read(void);
  */
 void sd_manager_consume(void);
 
-#ifdef DEBUG
-/** @brief Returns a human-readable name for the given state (DEBUG builds only). */
-const char *sd_sm_state_to_string(sd_sm_state_t state);
-#endif
+// #ifdef DEBUG
+// /** @brief Returns a human-readable name for the given state (DEBUG builds only). */
+// const char *sd_sm_state_to_string(sd_sm_state_t state);
+// #endif
 
 #endif

@@ -8,7 +8,7 @@ static SdFat32       sd;
 static File32        file;
 static int8_t        s_cs_pin  = -1;  // set by sd_manager_init()
 
-static char     s_filename[32];   // requested filename; cleared on open or error
+static char     s_filename[16];   // 8.3 format = max 13 chars
 static uint8_t *s_buf      = NULL;
 static uint16_t s_buf_size = 0;
 static uint16_t s_bytes_read = 0;
@@ -151,17 +151,17 @@ void sd_manager_consume(void) {
   }
 }
 
-#ifdef DEBUG
-const char *sd_sm_state_to_string(sd_sm_state_t state) {
-  switch (state) {
-    case SD_SM_INIT:       return "INIT";
-    case SD_SM_IDLE:       return "IDLE";
-    case SD_SM_OPEN:       return "OPEN";
-    case SD_SM_READ:       return "READ";
-    case SD_SM_CLOSE:      return "CLOSE";
-    case SD_SM_DATA_READY: return "DATA_READY";
-    case SD_SM_ERROR:      return "ERROR";
-    default:               return "UNKNOWN";
-  }
-}
-#endif
+// #ifdef DEBUG
+// const char *sd_sm_state_to_string(sd_sm_state_t state) {
+//   switch (state) {
+//     case SD_SM_INIT:       return "INIT";
+//     case SD_SM_IDLE:       return "IDLE";
+//     case SD_SM_OPEN:       return "OPEN";
+//     case SD_SM_READ:       return "READ";
+//     case SD_SM_CLOSE:      return "CLOSE";
+//     case SD_SM_DATA_READY: return "DATA_READY";
+//     case SD_SM_ERROR:      return "ERROR";
+//     default:               return "UNKNOWN";
+//   }
+// }
+// #endif
