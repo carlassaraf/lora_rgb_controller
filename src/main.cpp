@@ -7,7 +7,18 @@
 #define SD_CHUNK_SIZE 32
 
 static uint8_t s_chunk[SD_CHUNK_SIZE];
-static bool    s_loading = false;
+static bool    s_loading       = false;
+static char    s_last_file[16] = {0};  /* filename of the last loaded frame, for blink reload */
+
+/* Request a file from SD and arm the LED SM for loading. */
+static void request_file(const char *filename) {
+  if (sd_manager_request_file(filename, s_chunk, SD_CHUNK_SIZE)) {
+    strncpy(s_last_file, filename, sizeof(s_last_file) - 1);
+    s_last_file[sizeof(s_last_file) - 1] = '\0';
+    led_sm_start();
+    s_loading = true;
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -48,13 +59,26 @@ void loop() {
 #ifdef DEBUG
     Serial.print(F("MQTT rx: ")); Serial.println(payload);
 #endif
-    if (sd_manager_request_file(payload, s_chunk, SD_CHUNK_SIZE)) {
-      led_sm_start();
-      s_loading = true;
+    if (strncmp(payload, "BLK:", 4) == 0) {
+      /* BLK:<ms>  — set blink interval; BLK:0 disables */
+      led_sm_set_blink((uint16_t)atoi(payload + 4));
+    } else if (!s_loading) {
+      /* Numeric payload: "1" → "FRAME001.BIN", "23" → "FRAME023.BIN" */
+      char filename[] = "FRAME000.BIN";
+      uint16_t n = (uint16_t)atoi(payload);
+      filename[7] = '0' + (n % 10);
+      filename[6] = '0' + ((n / 10) % 10);
+      filename[5] = '0' + ((n / 100) % 10);
+      request_file(filename);
     }
 #ifdef DEBUG
     else { Serial.println(F("SD busy")); }
 #endif
+  }
+
+  /* Blink reload: re-feed the last frame from SD so the strip turns on again */
+  if (!s_loading && led_sm_blink_reload_needed() && s_last_file[0] != '\0') {
+    request_file(s_last_file);
   }
 
   sd_manager_run();
@@ -65,6 +89,10 @@ void loop() {
       led_sm_finish();
       s_loading = false;
     }
+  } else if (s_loading && sd_manager_get_state() == SD_SM_IDLE) {
+    /* File not found or other SD error — abort gracefully */
+    led_sm_reset();
+    s_loading = false;
   }
 
   led_sm_run();
