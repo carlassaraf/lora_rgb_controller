@@ -375,6 +375,10 @@ network_sm_state_t network_sm_run(void) {
 
 bool network_sm_mqtt_message_available(void) { return s_mqtt_available; }
 
+bool network_sm_rx_in_progress(void) {
+    return s_state == NETWORK_SM_READY && s_step > 0;
+}
+
 void network_sm_mqtt_get_message(char *topic, char *payload) {
   if (!s_mqtt_available) return;
   strcpy(topic,   s_mqtt_topic);

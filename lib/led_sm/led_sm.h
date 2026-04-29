@@ -11,7 +11,11 @@ typedef enum {
     LED_IDLE,
     LED_LOADING,
     LED_SENDING,
-    LED_DONE
+    LED_DONE,
+    LED_BLINK_ON,      /* frame is shown; waiting interval before blanking */
+    LED_BLINK_OFF,     /* strip is blank; waiting interval before reload   */
+    LED_BLINK_RELOAD,  /* main.cpp must re-feed the frame from SD          */
+    LED_ROTATING       /* shifting frame 1 LED per interval, in-place      */
 } led_sm_state_t;
 
 void led_sm_init(void);
@@ -21,5 +25,12 @@ void led_sm_finish(void);
 void led_sm_run(void);
 bool led_sm_done(void);
 void led_sm_reset(void);
+
+/* Blink API — interval_ms=0 disables; mutually exclusive with rotation */
+void led_sm_set_blink(uint16_t interval_ms);
+bool led_sm_blink_reload_needed(void);
+
+/* Rotation API — interval_ms=0 disables; mutually exclusive with blink */
+void led_sm_set_rot(uint16_t interval_ms);
 
 #endif
