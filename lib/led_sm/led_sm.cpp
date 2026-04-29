@@ -32,12 +32,22 @@ static led_sm_state_t s_state          = LED_IDLE;
 static uint16_t       s_offset         = 0;
 static uint16_t       s_blink_interval = 0;
 static uint32_t       s_blink_ts       = 0;
+static uint16_t       s_rot_interval   = 0;
+static uint32_t       s_rot_ts         = 0;
 
 static void show_all(void) {
     for (uint8_t p = 0; p < N_PINS; p++) {
         s_strip.setPin(PINS[p]);
         s_strip.show();
     }
+}
+
+/* Rotate buffer left by 1 LED (3 bytes): LED[0] wraps to the end. */
+static void rotate_one(void) {
+    uint8_t tmp[3];
+    memcpy(tmp, s_pix_buf, 3);
+    memmove(s_pix_buf, s_pix_buf + 3, LED_BUF_SIZE - 3);
+    memcpy(s_pix_buf + LED_BUF_SIZE - 3, tmp, 3);
 }
 
 void led_sm_init(void) {
@@ -68,11 +78,26 @@ void led_sm_finish(void) {
 void led_sm_run(void) {
     if (s_state == LED_SENDING) {
         show_all();
-        if (s_blink_interval > 0) {
+        if (s_rot_interval > 0) {
+            s_rot_ts = millis();
+            s_state = LED_ROTATING;
+        } else if (s_blink_interval > 0) {
             s_blink_ts = millis();
             s_state = LED_BLINK_ON;
         } else {
             s_state = LED_DONE;
+        }
+        return;
+    }
+    if (s_state == LED_ROTATING) {
+        if (s_rot_interval == 0) {
+            s_state = LED_DONE;
+            return;
+        }
+        if ((uint32_t)(millis() - s_rot_ts) >= s_rot_interval) {
+            rotate_one();
+            show_all();
+            s_rot_ts = millis();
         }
         return;
     }
@@ -99,15 +124,35 @@ void led_sm_reset(void) { s_state = LED_IDLE; }
 
 void led_sm_set_blink(uint16_t interval_ms) {
     s_blink_interval = interval_ms;
-    if (interval_ms > 0 && (s_state == LED_IDLE || s_state == LED_DONE)) {
-        /* Frame already shown but blink just enabled — reload it to start the cycle */
-        s_state = LED_BLINK_RELOAD;
-    }
-    if (interval_ms == 0 &&
-        (s_state == LED_BLINK_ON || s_state == LED_BLINK_OFF || s_state == LED_BLINK_RELOAD)) {
-        /* Trigger one final reload → shows frame → stays on (LED_DONE path) */
-        s_state = LED_BLINK_RELOAD;
+    s_rot_interval   = 0;
+    if (interval_ms > 0) {
+        if (s_state == LED_IDLE || s_state == LED_DONE || s_state == LED_ROTATING) {
+            s_blink_ts = millis();
+            s_state = LED_BLINK_ON;
+        } else if (s_state == LED_BLINK_OFF || s_state == LED_BLINK_RELOAD) {
+            s_state = LED_BLINK_RELOAD;  /* let reload restore the frame first */
+        }
+    } else {
+        if (s_state == LED_BLINK_ON || s_state == LED_BLINK_OFF || s_state == LED_BLINK_RELOAD) {
+            s_state = LED_BLINK_RELOAD;  /* final reload → shows frame → LED_DONE */
+        }
     }
 }
 
 bool led_sm_blink_reload_needed(void) { return s_state == LED_BLINK_RELOAD; }
+
+void led_sm_set_rot(uint16_t interval_ms) {
+    s_rot_interval   = interval_ms;
+    s_blink_interval = 0;
+    if (interval_ms > 0) {
+        if (s_state == LED_IDLE || s_state == LED_DONE ||
+            s_state == LED_BLINK_ON || s_state == LED_ROTATING) {
+            s_rot_ts = millis();
+            s_state = LED_ROTATING;
+        } else if (s_state == LED_BLINK_OFF || s_state == LED_BLINK_RELOAD) {
+            s_state = LED_BLINK_RELOAD;  /* let reload restore the frame first */
+        }
+    }
+    /* interval_ms == 0: s_rot_interval is now 0; led_sm_run() detects this on
+       the next tick and exits LED_ROTATING → LED_DONE regardless of call order */
+}

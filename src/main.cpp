@@ -60,8 +60,11 @@ void loop() {
     Serial.print(F("MQTT rx: ")); Serial.println(payload);
 #endif
     if (strncmp(payload, "BLK:", 4) == 0) {
-      /* BLK:<ms>  — set blink interval; BLK:0 disables */
+      /* BLK:<ms> — set blink interval; BLK:0 disables */
       led_sm_set_blink((uint16_t)atoi(payload + 4));
+    } else if (strncmp(payload, "ROT:", 4) == 0) {
+      /* ROT:<ms> — rotate 1 LED every <ms>; ROT:0 freezes */
+      led_sm_set_rot((uint16_t)atoi(payload + 4));
     } else if (!s_loading) {
       /* Numeric payload: "1" → "FRAME001.BIN", "23" → "FRAME023.BIN" */
       char filename[] = "FRAME000.BIN";
@@ -95,6 +98,6 @@ void loop() {
     s_loading = false;
   }
 
-  led_sm_run();
+  if (!network_sm_rx_in_progress()) led_sm_run();
   if (led_sm_done()) led_sm_reset();
 }
