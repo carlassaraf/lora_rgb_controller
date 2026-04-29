@@ -73,6 +73,13 @@ bool network_sm_mqtt_message_available(void);
  */
 void network_sm_mqtt_get_message(char *topic, char *payload);
 
+/**
+ * @brief Returns true while a multi-line MQTT message URC is being assembled.
+ * @note Use this to avoid disabling interrupts (e.g. NeoPixel show()) while
+ *       the modem is mid-message, which would corrupt incoming UART bytes.
+ */
+bool network_sm_rx_in_progress(void);
+
 // #ifdef DEBUG
 // /** @brief Returns a human-readable name for the given state (DEBUG builds only). */
 // const char *network_sm_state_to_string(network_sm_state_t state);
